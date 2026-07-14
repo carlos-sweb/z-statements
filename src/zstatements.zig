@@ -14,6 +14,8 @@ pub const ForHead = ast_mod.ForHead;
 
 pub const Parser = parser_mod.Parser;
 pub const ParseError = parser_mod.ParseError;
+pub const StatementHooks = parser_mod.StatementHooks;
+pub const StatementHookResult = parser_mod.StatementHookResult;
 
 test {
     _ = @import("ast.zig");

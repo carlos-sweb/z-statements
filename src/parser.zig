@@ -37,12 +37,28 @@ pub const ParseError = error{
 
 const LabelInfo = struct { name: []const u8, is_loop: bool };
 
+/// Result of a `StatementHooks` callback: an opaque, arena-allocated node
+/// plus its precise end position (this repo can't read `.end` off the
+/// opaque node itself without dereferencing it, which it must never do).
+pub const StatementHookResult = struct { node: *anyopaque, end: usize };
+
+/// Hooks a dependent repo (z-functions) installs so this parser can produce
+/// a proper FunctionDeclaration statement (instead of an ExpressionStatement
+/// wrapping a function expression) when `function` appears at statement
+/// position. Null by default -- every existing call site's behavior is
+/// unchanged when no hooks are installed.
+pub const StatementHooks = struct {
+    ctx: *anyopaque,
+    parseFunctionDeclaration: *const fn (ctx: *anyopaque, parser: *zparser.Parser) ParseError!StatementHookResult,
+};
+
 pub const Parser = struct {
     expr_parser: zparser.Parser,
     arena: Allocator,
     loop_depth: u32 = 0,
     switch_depth: u32 = 0,
     labels: std.ArrayList(LabelInfo) = .empty,
+    statement_hooks: ?StatementHooks = null,
 
     pub fn init(arena: Allocator, source: []const u8) ParseError!Parser {
         return .{
@@ -78,6 +94,11 @@ pub const Parser = struct {
             .keyword_switch => return self.parseSwitchStatement(),
             .keyword_debugger => return self.parseDebuggerStatement(),
             .keyword_with => return self.parseWithStatement(),
+            .keyword_function => if (self.statement_hooks) |h| {
+                const start = self.expr_parser.current.start;
+                const result = try h.parseFunctionDeclaration(h.ctx, &self.expr_parser);
+                return self.newStmt(start, result.end, .{ .function_declaration = result.node });
+            } else return ParseError.UnexpectedToken,
             .identifier => {
                 if (self.isLetKeyword()) return self.parseVariableStatement();
                 if (try self.peekIsColon()) return self.parseLabelledStatement();
@@ -204,7 +225,7 @@ pub const Parser = struct {
 
     /// A plain BindingIdentifier only -- destructuring patterns are out of
     /// scope for this phase (see README).
-    fn parseBindingName(self: *Parser) ParseError!ast.BindingName {
+    pub fn parseBindingName(self: *Parser) ParseError!ast.BindingName {
         const tok = self.expr_parser.current;
         if (tok.type == .punct_lbracket or tok.type == .punct_lbrace) {
             return ParseError.DestructuringBindingNotSupported;
@@ -275,7 +296,7 @@ pub const Parser = struct {
     /// division` context to be correct on whatever follows this block's own
     /// closing `}` -- `regexAllowedAfter`'s default (regex allowed) is
     /// correct here since a fresh statement position follows.
-    fn parseBlockStatement(self: *Parser) ParseError!*Statement {
+    pub fn parseBlockStatement(self: *Parser) ParseError!*Statement {
         const start = self.expr_parser.current.start;
         _ = try self.expr_parser.expect(.punct_lbrace);
         var stmts: std.ArrayList(*Statement) = .empty;

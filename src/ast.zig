@@ -69,4 +69,7 @@ pub const StatementData = union(enum) {
     switch_stmt: struct { discriminant: *zparser.Node, cases: []const SwitchCase },
     debugger: void,
     with_stmt: struct { object: *zparser.Node, body: *Statement },
+    /// A function declaration, typed and owned solely by z-functions -- this
+    /// repo never dereferences it. See z-functions' `asFunctionNode()`.
+    function_declaration: *anyopaque,
 };
