@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const zlexer = @import("zlexer");
 const zparser = @import("zparser");
 const ast = @import("ast.zig");
 const Statement = ast.Statement;
@@ -12,12 +13,16 @@ pub const ParseError = error{
     /// return/break/continue, ThrowStatement has no argument-less form, so
     /// this is a hard SyntaxError, not an ASI save.
     IllegalNewlineAfterThrow,
-    /// A `var`/`let`/`const` declarator name, a `catch` parameter, or a
-    /// for-in/for-of loop binding was `[` or `{` (a destructuring pattern)
-    /// instead of a plain identifier.
-    DestructuringBindingNotSupported,
     /// `const x;` -- const declarators require an initializer.
     MissingConstInitializer,
+    /// `let [a];` / `var {x};` -- a destructuring declarator requires an
+    /// initializer (real ECMA-262 early error; for-in/of heads, function
+    /// params, and catch bindings are different productions and exempt).
+    MissingDestructuringInitializer,
+    /// A `...rest` element inside a destructuring pattern was not the last
+    /// thing before the closing `]`/`}` (`[...a, b]`, `{...r, x}`), or an
+    /// array-pattern rest carried a default (`[...a = []]`).
+    RestElementMustBeLast,
     /// `for (expr in expr)` reinterpretation found a top-level `in`
     /// expression whose left side isn't a plain identifier, e.g.
     /// `for (a.b in obj)` or `for (a + b in obj)`.
@@ -223,22 +228,111 @@ pub const Parser = struct {
         };
     }
 
-    /// A plain BindingIdentifier only -- destructuring patterns are out of
-    /// scope for this phase (see README).
+    /// A plain BindingIdentifier only. Still the right call for positions
+    /// where the real grammar takes an identifier, not a pattern (function
+    /// names, object-pattern rest, z-functions' rest parameter).
     pub fn parseBindingName(self: *Parser) ParseError!ast.BindingName {
         const tok = self.expr_parser.current;
-        if (tok.type == .punct_lbracket or tok.type == .punct_lbrace) {
-            return ParseError.DestructuringBindingNotSupported;
-        }
         if (tok.type != .identifier) return ParseError.UnexpectedToken;
         const name = tok.owned_value orelse tok.lexeme;
         try self.expr_parser.advance();
         return .{ .name = name, .start = tok.start, .end = tok.end };
     }
 
-    fn parseDeclaratorListFrom(self: *Parser, kind: ast.VariableKind, first_name: ast.BindingName) ParseError![]const ast.Declarator {
+    /// BindingIdentifier | ArrayBindingPattern | ObjectBindingPattern.
+    /// The single entry point every binding position (declarators, catch
+    /// params, for-in/of declared bindings, z-functions' params) goes
+    /// through -- adding pattern support here covered all of them at once.
+    pub fn parseBindingPattern(self: *Parser) ParseError!*ast.BindingPattern {
+        const pat = try self.arena.create(ast.BindingPattern);
+        pat.* = switch (self.expr_parser.current.type) {
+            .punct_lbracket => .{ .array = try self.parseArrayPattern() },
+            .punct_lbrace => .{ .object = try self.parseObjectPattern() },
+            else => .{ .identifier = try self.parseBindingName() },
+        };
+        return pat;
+    }
+
+    fn parseArrayPattern(self: *Parser) ParseError!ast.ArrayPattern {
+        _ = try self.expr_parser.expect(.punct_lbracket);
+        var elements: std.ArrayList(?ast.ArrayPatternElement) = .empty;
+        var rest: ?*ast.BindingPattern = null;
+        while (self.expr_parser.current.type != .punct_rbracket) {
+            if (self.expr_parser.current.type == .punct_comma) {
+                // Elision hole (`[, x]`). A comma right after an element was
+                // already consumed as the separator below, so any comma seen
+                // at element position is a genuine hole.
+                try elements.append(self.arena, null);
+                try self.expr_parser.advance();
+                continue;
+            }
+            if (self.expr_parser.current.type == .punct_ellipsis) {
+                try self.expr_parser.advance();
+                rest = try self.parseBindingPattern();
+                if (self.expr_parser.current.type != .punct_rbracket) return ParseError.RestElementMustBeLast;
+                break;
+            }
+            const elem_pat = try self.parseBindingPattern();
+            var default: ?*zparser.Node = null;
+            if (self.expr_parser.current.type == .punct_assign) {
+                try self.expr_parser.advance();
+                default = try self.expr_parser.parseAssignmentExpression();
+            }
+            try elements.append(self.arena, .{ .pattern = elem_pat, .default = default });
+            if (self.expr_parser.current.type != .punct_rbracket) _ = try self.expr_parser.expect(.punct_comma);
+        }
+        _ = try self.expr_parser.expect(.punct_rbracket);
+        return .{ .elements = try elements.toOwnedSlice(self.arena), .rest = rest };
+    }
+
+    /// Keys follow z-parser's `parseObjectProperty` criterion for the
+    /// identifier/keyword cases (`{ if: x }` is legal); string, number, and
+    /// computed keys in patterns are out of scope for this phase. Shorthand
+    /// (`{x}`) requires a real identifier -- `{if}` would otherwise bind a
+    /// reserved word.
+    fn parseObjectPattern(self: *Parser) ParseError!ast.ObjectPattern {
+        _ = try self.expr_parser.expect(.punct_lbrace);
+        var properties: std.ArrayList(ast.ObjectPatternProperty) = .empty;
+        var rest: ?ast.BindingName = null;
+        while (self.expr_parser.current.type != .punct_rbrace) {
+            if (self.expr_parser.current.type == .punct_ellipsis) {
+                try self.expr_parser.advance();
+                rest = try self.parseBindingName();
+                if (self.expr_parser.current.type != .punct_rbrace) return ParseError.RestElementMustBeLast;
+                break;
+            }
+            const key_tok = self.expr_parser.current;
+            const is_identifier = key_tok.type == .identifier;
+            if (!is_identifier and zlexer.keywordFromLexeme(key_tok.lexeme) == null) {
+                return ParseError.UnexpectedToken;
+            }
+            const key = key_tok.owned_value orelse key_tok.lexeme;
+            try self.expr_parser.advance();
+            var value: *ast.BindingPattern = undefined;
+            if (self.expr_parser.current.type == .punct_colon) {
+                try self.expr_parser.advance();
+                value = try self.parseBindingPattern();
+            } else {
+                if (!is_identifier) return ParseError.UnexpectedToken;
+                const id = try self.arena.create(ast.BindingPattern);
+                id.* = .{ .identifier = .{ .name = key, .start = key_tok.start, .end = key_tok.end } };
+                value = id;
+            }
+            var default: ?*zparser.Node = null;
+            if (self.expr_parser.current.type == .punct_assign) {
+                try self.expr_parser.advance();
+                default = try self.expr_parser.parseAssignmentExpression();
+            }
+            try properties.append(self.arena, .{ .key = key, .value = value, .default = default });
+            if (self.expr_parser.current.type != .punct_rbrace) _ = try self.expr_parser.expect(.punct_comma);
+        }
+        _ = try self.expr_parser.expect(.punct_rbrace);
+        return .{ .properties = try properties.toOwnedSlice(self.arena), .rest = rest };
+    }
+
+    fn parseDeclaratorListFrom(self: *Parser, kind: ast.VariableKind, first_pattern: *ast.BindingPattern) ParseError![]const ast.Declarator {
         var declarators: std.ArrayList(ast.Declarator) = .empty;
-        var name = first_name;
+        var pattern = first_pattern;
         while (true) {
             var init_expr: ?*zparser.Node = null;
             if (self.expr_parser.current.type == .punct_assign) {
@@ -246,18 +340,20 @@ pub const Parser = struct {
                 init_expr = try self.expr_parser.parseAssignmentExpression();
             } else if (kind == .@"const") {
                 return ParseError.MissingConstInitializer;
+            } else if (pattern.* != .identifier) {
+                return ParseError.MissingDestructuringInitializer;
             }
-            try declarators.append(self.arena, .{ .name = name, .init = init_expr });
+            try declarators.append(self.arena, .{ .pattern = pattern, .init = init_expr });
             if (self.expr_parser.current.type != .punct_comma) break;
             try self.expr_parser.advance();
-            name = try self.parseBindingName();
+            pattern = try self.parseBindingPattern();
         }
         return declarators.toOwnedSlice(self.arena);
     }
 
     fn parseDeclaratorList(self: *Parser, kind: ast.VariableKind) ParseError![]const ast.Declarator {
-        const first_name = try self.parseBindingName();
-        return self.parseDeclaratorListFrom(kind, first_name);
+        const first_pattern = try self.parseBindingPattern();
+        return self.parseDeclaratorListFrom(kind, first_pattern);
     }
 
     /// Parses `test? ; update?` given that the `;` separating init from
@@ -314,7 +410,9 @@ pub const Parser = struct {
         try self.expr_parser.advance(); // consume var/const/let
         const declarators = try self.parseDeclaratorList(kind);
         const last = declarators[declarators.len - 1];
-        const end = if (last.init) |e| e.end else last.name.end;
+        // No-init declarators are guaranteed identifiers here: a pattern
+        // without an initializer is rejected in parseDeclaratorListFrom.
+        const end = if (last.init) |e| e.end else last.pattern.identifier.end;
         try self.consumeSemicolon();
         return self.newStmt(start, end, .{ .variable = .{ .kind = kind, .declarators = declarators } });
     }
@@ -393,23 +491,23 @@ pub const Parser = struct {
             if (self.currentStartsDeclaration()) {
                 const kind = self.currentVariableKind();
                 try self.expr_parser.advance(); // consume var/const/let
-                const name = try self.parseBindingName();
+                const pattern = try self.parseBindingPattern();
                 if (self.expr_parser.current.type == .keyword_in) {
                     try self.expr_parser.advance();
                     const object = try self.expr_parser.parseExpression();
-                    break :blk .{ .for_in = .{ .binding = .{ .declared = .{ .kind = kind, .name = name } }, .object = object } };
+                    break :blk .{ .for_in = .{ .binding = .{ .declared = .{ .kind = kind, .pattern = pattern } }, .object = object } };
                 }
                 if (self.isOfKeyword()) {
                     try self.expr_parser.advance();
                     const iterable = try self.expr_parser.parseAssignmentExpression();
-                    break :blk .{ .for_of = .{ .binding = .{ .declared = .{ .kind = kind, .name = name } }, .iterable = iterable } };
+                    break :blk .{ .for_of = .{ .binding = .{ .declared = .{ .kind = kind, .pattern = pattern } }, .iterable = iterable } };
                 }
                 // C-style: continue the declarator list from this binding.
                 // (The legacy Annex-B `for (var x = 0 in obj)` form is
                 // rejected here, not supported -- once `=` is consumed by
                 // parseDeclaratorListFrom, `in`/`of` are no longer checked,
                 // so that input falls through to expecting ';' and errors.)
-                const declarators = try self.parseDeclaratorListFrom(kind, name);
+                const declarators = try self.parseDeclaratorListFrom(kind, pattern);
                 _ = try self.expr_parser.expect(.punct_semi);
                 const tu = try self.parseForTestUpdate();
                 break :blk .{ .c_style = .{ .init = .{ .decl = .{ .kind = kind, .declarators = declarators } }, .test_expr = tu.test_expr, .update = tu.update } };
@@ -526,10 +624,10 @@ pub const Parser = struct {
         var end = block.end;
         if (self.expr_parser.current.type == .keyword_catch) {
             try self.expr_parser.advance();
-            var param: ?ast.BindingName = null;
+            var param: ?*ast.BindingPattern = null;
             if (self.expr_parser.current.type == .punct_lparen) {
                 try self.expr_parser.advance();
-                param = try self.parseBindingName();
+                param = try self.parseBindingPattern();
                 _ = try self.expr_parser.expect(.punct_rparen);
             }
             const catch_body = try self.parseBlockStatement();

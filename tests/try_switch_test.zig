@@ -8,7 +8,7 @@ test "try/catch with a bound parameter" {
         fn check(_: void, stmt: *zstatements.Statement) !void {
             try testing.expect(stmt.data == .try_stmt);
             try testing.expect(stmt.data.try_stmt.handler != null);
-            try testing.expectEqualStrings("e", stmt.data.try_stmt.handler.?.param.?.name);
+            try testing.expectEqualStrings("e", stmt.data.try_stmt.handler.?.param.?.identifier.name);
             try testing.expect(stmt.data.try_stmt.finalizer == null);
         }
     }.check);
@@ -45,9 +45,21 @@ test "try with neither catch nor finally is a hard error" {
     try helpers.expectParseError("try { a; }", zstatements.ParseError.UnexpectedToken);
 }
 
-test "destructuring catch parameters are rejected" {
-    try helpers.expectParseError("try { a; } catch ([e]) { b; }", zstatements.ParseError.DestructuringBindingNotSupported);
-    try helpers.expectParseError("try { a; } catch ({e}) { b; }", zstatements.ParseError.DestructuringBindingNotSupported);
+test "destructuring catch parameters parse as binding patterns" {
+    try helpers.parseAndCheck("try { a; } catch ([e]) { b; }", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const param = stmt.data.try_stmt.handler.?.param.?;
+            try testing.expect(param.* == .array);
+            try testing.expectEqualStrings("e", param.array.elements[0].?.pattern.identifier.name);
+        }
+    }.check);
+    try helpers.parseAndCheck("try { a; } catch ({message}) { b; }", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const param = stmt.data.try_stmt.handler.?.param.?;
+            try testing.expect(param.* == .object);
+            try testing.expectEqualStrings("message", param.object.properties[0].key);
+        }
+    }.check);
 }
 
 test "switch with case and default clauses" {

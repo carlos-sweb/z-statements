@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const test_files = [_][]const u8{
         "tests/block_test.zig",
         "tests/variable_test.zig",
+        "tests/destructuring_test.zig",
         "tests/if_test.zig",
         "tests/loop_test.zig",
         "tests/break_continue_test.zig",

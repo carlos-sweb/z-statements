@@ -58,7 +58,7 @@ test "for-of with a declaration" {
             try testing.expect(stmt.data.for_stmt.head == .for_of);
             const binding = stmt.data.for_stmt.head.for_of.binding;
             try testing.expect(binding == .declared);
-            try testing.expectEqualStrings("x", binding.declared.name.name);
+            try testing.expectEqualStrings("x", binding.declared.pattern.identifier.name);
         }
     }.check);
 }
@@ -96,8 +96,15 @@ test "legacy Annex-B `for (var x = 0 in obj)` initializer form is rejected" {
     try helpers.expectParseError("for (var x = 0 in obj) a;", zstatements.ParseError.UnexpectedToken);
 }
 
-test "for-in/for-of bindings are identifier-only" {
-    try helpers.expectParseError("for (let [a] of arr) x;", zstatements.ParseError.DestructuringBindingNotSupported);
+test "for-of declared bindings accept destructuring patterns" {
+    try helpers.parseAndCheck("for (const [k, v] of pairs) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const binding = stmt.data.for_stmt.head.for_of.binding;
+            try testing.expect(binding == .declared);
+            try testing.expect(binding.declared.pattern.* == .array);
+            try testing.expectEqual(@as(usize, 2), binding.declared.pattern.array.elements.len);
+        }
+    }.check);
 }
 
 test "a member expression as an unparenthesized for-in target is rejected" {

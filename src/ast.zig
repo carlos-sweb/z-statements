@@ -8,22 +8,59 @@ pub const Statement = struct {
 
 pub const VariableKind = enum { @"var", let, @"const" };
 
-/// A plain BindingIdentifier. Destructuring binding patterns (`[a,b]`,
-/// `{x,y}`) are explicitly out of scope for this phase -- see README.
+/// A plain BindingIdentifier.
 pub const BindingName = struct {
     name: []const u8,
     start: usize,
     end: usize,
 };
 
+/// A binding position: either a plain identifier or a destructuring
+/// pattern. Every binding site (declarators, function params, catch,
+/// for-in/of declared bindings) holds one of these.
+pub const BindingPattern = union(enum) {
+    identifier: BindingName,
+    array: ArrayPattern,
+    object: ObjectPattern,
+};
+
+pub const ArrayPatternElement = struct {
+    pattern: *BindingPattern,
+    /// `= AssignmentExpression` initializer, applied when the source
+    /// element is undefined.
+    default: ?*zparser.Node,
+};
+
+pub const ArrayPattern = struct {
+    /// null = elision hole (`[, x]`).
+    elements: []const ?ArrayPatternElement,
+    /// `...pat` -- recursive per spec (`[...[a, b]]` is legal).
+    rest: ?*BindingPattern,
+};
+
+pub const ObjectPatternProperty = struct {
+    /// Property name as written in source. Computed keys are out of
+    /// scope for this phase.
+    key: []const u8,
+    /// Shorthand `{x}` becomes an identifier pattern for `x`.
+    value: *BindingPattern,
+    default: ?*zparser.Node,
+};
+
+pub const ObjectPattern = struct {
+    properties: []const ObjectPatternProperty,
+    /// `...rest` -- identifier only, per the real spec grammar.
+    rest: ?BindingName,
+};
+
 pub const Declarator = struct {
-    name: BindingName,
+    pattern: *BindingPattern,
     init: ?*zparser.Node,
 };
 
 pub const CatchClause = struct {
     /// null = `catch { ... }` (optional catch binding, ES2019+).
-    param: ?BindingName,
+    param: ?*BindingPattern,
     body: *Statement, // always .block
 };
 
@@ -42,7 +79,7 @@ pub const ForBinding = union(enum) {
     /// `for (x in/of ...)` -- pre-existing binding, no declaration keyword.
     existing: BindingName,
     /// `for (var/let/const x in/of ...)`.
-    declared: struct { kind: VariableKind, name: BindingName },
+    declared: struct { kind: VariableKind, pattern: *BindingPattern },
 };
 
 pub const ForHead = union(enum) {
