@@ -78,6 +78,11 @@ pub const ForInit = union(enum) {
 pub const ForBinding = union(enum) {
     /// `for (x in/of ...)` -- pre-existing binding, no declaration keyword.
     existing: BindingName,
+    /// `for ([a, b] of ...)` / `for ({x} in ...)` -- a destructuring
+    /// *assignment* over pre-existing bindings. The node is the array/
+    /// object literal as parsed, already validated by z-parser's
+    /// isValidAssignmentPattern (cover-grammar reinterpretation).
+    existing_pattern: *zparser.Node,
     /// `for (var/let/const x in/of ...)`.
     declared: struct { kind: VariableKind, pattern: *BindingPattern },
 };

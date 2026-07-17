@@ -24,8 +24,9 @@ pub const ParseError = error{
     /// array-pattern rest carried a default (`[...a = []]`).
     RestElementMustBeLast,
     /// `for (expr in expr)` reinterpretation found a top-level `in`
-    /// expression whose left side isn't a plain identifier, e.g.
-    /// `for (a.b in obj)` or `for (a + b in obj)`.
+    /// expression whose left side isn't a plain identifier or a valid
+    /// destructuring assignment pattern, e.g. `for (a.b in obj)` or
+    /// `for (a + b in obj)`.
     InvalidForInTarget,
     /// break/continue with no enclosing loop (continue) or loop/switch
     /// (break), and no valid label reference either.
@@ -522,6 +523,13 @@ pub const Parser = struct {
             const expr = try self.expr_parser.parseExpression();
             if (self.expr_parser.current.type == .punct_rparen and expr.data == .binary and expr.data.binary.op == .in) {
                 const bin = expr.data.binary;
+                if (bin.left.data == .array_literal or bin.left.data == .object_literal) {
+                    // `for ([a, b] in obj)` -- destructuring assignment over
+                    // existing bindings; same cover-grammar validation as
+                    // `[a, b] = x`.
+                    if (!zparser.isValidAssignmentPattern(bin.left)) return ParseError.InvalidAssignmentTarget;
+                    break :blk .{ .for_in = .{ .binding = .{ .existing_pattern = bin.left }, .object = bin.right } };
+                }
                 if (bin.left.data != .identifier) return ParseError.InvalidForInTarget;
                 const name: ast.BindingName = .{ .name = bin.left.data.identifier, .start = bin.left.start, .end = bin.left.end };
                 break :blk .{ .for_in = .{ .binding = .{ .existing = name }, .object = bin.right } };
@@ -531,6 +539,15 @@ pub const Parser = struct {
                 try self.expr_parser.advance(); // consume 'of'
                 const iterable = try self.expr_parser.parseAssignmentExpression();
                 break :blk .{ .for_of = .{ .binding = .{ .existing = name }, .iterable = iterable } };
+            }
+            if ((expr.data == .array_literal or expr.data == .object_literal) and self.isOfKeyword()) {
+                // `for ([a, b] of x)` -- the literal parsed eagerly, `of`
+                // isn't an expression continuation so parseExpression
+                // already stopped right after it.
+                if (!zparser.isValidAssignmentPattern(expr)) return ParseError.InvalidAssignmentTarget;
+                try self.expr_parser.advance(); // consume 'of'
+                const iterable = try self.expr_parser.parseAssignmentExpression();
+                break :blk .{ .for_of = .{ .binding = .{ .existing_pattern = expr }, .iterable = iterable } };
             }
             _ = try self.expr_parser.expect(.punct_semi);
             const tu = try self.parseForTestUpdate();

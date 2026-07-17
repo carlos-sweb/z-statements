@@ -136,3 +136,27 @@ test "for-in declared object pattern" {
         }
     }.check);
 }
+
+test "for-of over existing bindings accepts a destructuring assignment pattern" {
+    try helpers.parseAndCheck("for ([k, v] of pairs) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const binding = stmt.data.for_stmt.head.for_of.binding;
+            try testing.expect(binding == .existing_pattern);
+            try testing.expect(binding.existing_pattern.data == .array_literal);
+        }
+    }.check);
+}
+
+test "for-in over existing bindings accepts a destructuring assignment pattern" {
+    try helpers.parseAndCheck("for ([a, b] in obj) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const binding = stmt.data.for_stmt.head.for_in.binding;
+            try testing.expect(binding == .existing_pattern);
+        }
+    }.check);
+}
+
+test "invalid patterns in for heads are rejected at parse time" {
+    try helpers.expectParseError("for ([1] of arr) x;", zstatements.ParseError.InvalidAssignmentTarget);
+    try helpers.expectParseError("for ([a + b] in obj) x;", zstatements.ParseError.InvalidAssignmentTarget);
+}
