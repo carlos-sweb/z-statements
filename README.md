@@ -26,7 +26,7 @@ No new AST vocabulary duplicates `z-parser`'s: every expression-valued position 
 
 ## Known gaps (deferred to future phases)
 
-- **Class declarations as statements**: need class-body grammar no repo in this family has yet.
+- ~~Class declarations as statements~~ — implemented via the same hook pattern as function declarations: `StatementHooks.parseClassDeclaration` + an opaque `.class_declaration: *anyopaque` `StatementData` variant owned by z-functions.
 - **String/number/computed keys in object *binding* patterns** (`const {"a b": x} = o`): still out of scope (assignment patterns do support computed keys, since they ride the expression AST).
 - **Modules** (`import`/`export` statement grammar): the keywords are already tokenized by `z-lexer`, but their statement-level grammar is entirely out of scope here.
 - **Generators/async functions/`await`-as-statement**: N/A while functions overall are deferred.

@@ -56,6 +56,7 @@ pub const StatementHookResult = struct { node: *anyopaque, end: usize };
 pub const StatementHooks = struct {
     ctx: *anyopaque,
     parseFunctionDeclaration: *const fn (ctx: *anyopaque, parser: *zparser.Parser) ParseError!StatementHookResult,
+    parseClassDeclaration: *const fn (ctx: *anyopaque, parser: *zparser.Parser) ParseError!StatementHookResult,
 };
 
 pub const Parser = struct {
@@ -104,6 +105,11 @@ pub const Parser = struct {
                 const start = self.expr_parser.current.start;
                 const result = try h.parseFunctionDeclaration(h.ctx, &self.expr_parser);
                 return self.newStmt(start, result.end, .{ .function_declaration = result.node });
+            } else return ParseError.UnexpectedToken,
+            .keyword_class => if (self.statement_hooks) |h| {
+                const start = self.expr_parser.current.start;
+                const result = try h.parseClassDeclaration(h.ctx, &self.expr_parser);
+                return self.newStmt(start, result.end, .{ .class_declaration = result.node });
             } else return ParseError.UnexpectedToken,
             .identifier => {
                 if (self.isLetKeyword()) return self.parseVariableStatement();

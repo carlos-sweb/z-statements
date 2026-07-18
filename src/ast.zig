@@ -114,4 +114,7 @@ pub const StatementData = union(enum) {
     /// A function declaration, typed and owned solely by z-functions -- this
     /// repo never dereferences it. See z-functions' `asFunctionNode()`.
     function_declaration: *anyopaque,
+    /// A class declaration, typed and owned solely by z-functions -- this
+    /// repo never dereferences it. See z-functions' `asClassNode()`.
+    class_declaration: *anyopaque,
 };
