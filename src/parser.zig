@@ -113,6 +113,19 @@ pub const Parser = struct {
             } else return ParseError.UnexpectedToken,
             .identifier => {
                 if (self.isLetKeyword()) return self.parseVariableStatement();
+                // `async function f() {}` as a declaration -- the hook
+                // consumes `async` itself, same no-advance contract as
+                // z-parser's expression-position handling.
+                if (self.statement_hooks) |h| {
+                    const tok = self.expr_parser.current;
+                    if (std.mem.eql(u8, tok.owned_value orelse tok.lexeme, "async") and
+                        (try self.expr_parser.peekNextType()) == .keyword_function)
+                    {
+                        const start = tok.start;
+                        const result = try h.parseFunctionDeclaration(h.ctx, &self.expr_parser);
+                        return self.newStmt(start, result.end, .{ .function_declaration = result.node });
+                    }
+                }
                 if (try self.peekIsColon()) return self.parseLabelledStatement();
                 return self.parseExpressionStatement();
             },
