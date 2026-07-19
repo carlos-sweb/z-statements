@@ -106,6 +106,8 @@ pub const Parser = struct {
                 const result = try h.parseFunctionDeclaration(h.ctx, &self.expr_parser);
                 return self.newStmt(start, result.end, .{ .function_declaration = result.node });
             } else return ParseError.UnexpectedToken,
+            .keyword_import => return self.parseImportDeclaration(),
+            .keyword_export => return self.parseExportDeclaration(),
             .keyword_class => if (self.statement_hooks) |h| {
                 const start = self.expr_parser.current.start;
                 const result = try h.parseClassDeclaration(h.ctx, &self.expr_parser);
@@ -735,6 +737,152 @@ pub const Parser = struct {
         _ = try self.expr_parser.expect(.punct_rparen);
         const body = try self.parseStatement();
         return self.newStmt(start, body.end, .{ .with_stmt = .{ .object = object, .body = body } });
+    }
+
+    /// A module specifier's source string (`from '...'` / `import '...'`).
+    fn parseModuleSource(self: *Parser) ParseError![]const u8 {
+        const tok = self.expr_parser.current;
+        if (tok.type != .string_literal) return ParseError.UnexpectedToken;
+        const v = tok.owned_value orelse tok.lexeme[1 .. tok.lexeme.len - 1];
+        try self.expr_parser.advance();
+        return v;
+    }
+
+    /// An import/export specifier name: identifier or keyword lexeme
+    /// (`import { default as d }` is legal in the real grammar).
+    fn parseModuleName(self: *Parser) ParseError![]const u8 {
+        const tok = self.expr_parser.current;
+        if (tok.type == .identifier) {
+            const name = tok.owned_value orelse tok.lexeme;
+            try self.expr_parser.advance();
+            return name;
+        }
+        if (zlexer.keywordFromLexeme(tok.lexeme) != null) {
+            try self.expr_parser.advance();
+            return tok.lexeme;
+        }
+        return ParseError.UnexpectedToken;
+    }
+
+    fn currentIsIdentifier(self: *Parser, lexeme: []const u8) bool {
+        const tok = self.expr_parser.current;
+        return tok.type == .identifier and std.mem.eql(u8, tok.owned_value orelse tok.lexeme, lexeme);
+    }
+
+    /// `import 'm'` | `import d[, {…}|, * as ns] from 'm'` |
+    /// `import {…} from 'm'` | `import * as ns from 'm'`. Accepted at any
+    /// statement position (permissive); the interpreter enforces
+    /// module-top-level-only.
+    fn parseImportDeclaration(self: *Parser) ParseError!*Statement {
+        const start = self.expr_parser.current.start;
+        try self.expr_parser.advance(); // 'import'
+
+        // Side-effect-only form.
+        if (self.expr_parser.current.type == .string_literal) {
+            const source = try self.parseModuleSource();
+            try self.consumeSemicolon();
+            return self.newStmt(start, self.expr_parser.current.start, .{ .import_decl = .{
+                .default_local = null,
+                .namespace_local = null,
+                .named = &.{},
+                .source = source,
+            } });
+        }
+
+        var default_local: ?[]const u8 = null;
+        var namespace_local: ?[]const u8 = null;
+        var named: std.ArrayList(ast.ImportSpecifier) = .empty;
+
+        if (self.expr_parser.current.type == .identifier) {
+            default_local = (try self.parseBindingName()).name;
+            if (self.expr_parser.current.type == .punct_comma) try self.expr_parser.advance();
+        }
+        if (self.expr_parser.current.type == .punct_star) {
+            try self.expr_parser.advance();
+            if (!self.currentIsIdentifier("as")) return ParseError.UnexpectedToken;
+            try self.expr_parser.advance();
+            namespace_local = (try self.parseBindingName()).name;
+        } else if (self.expr_parser.current.type == .punct_lbrace) {
+            try self.expr_parser.advance();
+            while (self.expr_parser.current.type != .punct_rbrace) {
+                const imported = try self.parseModuleName();
+                var local = imported;
+                if (self.currentIsIdentifier("as")) {
+                    try self.expr_parser.advance();
+                    local = (try self.parseBindingName()).name;
+                }
+                try named.append(self.arena, .{ .imported = imported, .local = local });
+                if (self.expr_parser.current.type != .punct_rbrace) _ = try self.expr_parser.expect(.punct_comma);
+            }
+            try self.expr_parser.advance(); // '}'
+        }
+        if (default_local == null and namespace_local == null and named.items.len == 0) {
+            return ParseError.UnexpectedToken;
+        }
+
+        if (!self.currentIsIdentifier("from")) return ParseError.UnexpectedToken;
+        try self.expr_parser.advance();
+        const source = try self.parseModuleSource();
+        try self.consumeSemicolon();
+        return self.newStmt(start, self.expr_parser.current.start, .{ .import_decl = .{
+            .default_local = default_local,
+            .namespace_local = namespace_local,
+            .named = try named.toOwnedSlice(self.arena),
+            .source = source,
+        } });
+    }
+
+    /// `export <declaration>` | `export { a as b } [from 'm']` |
+    /// `export default expr` | `export * from 'm'`.
+    fn parseExportDeclaration(self: *Parser) ParseError!*Statement {
+        const start = self.expr_parser.current.start;
+        try self.expr_parser.advance(); // 'export'
+
+        if (self.expr_parser.current.type == .punct_star) {
+            try self.expr_parser.advance();
+            if (!self.currentIsIdentifier("from")) return ParseError.UnexpectedToken;
+            try self.expr_parser.advance();
+            const source = try self.parseModuleSource();
+            try self.consumeSemicolon();
+            return self.newStmt(start, self.expr_parser.current.start, .{ .export_decl = .{ .all = .{ .source = source } } });
+        }
+
+        if (self.expr_parser.current.type == .keyword_default) {
+            try self.expr_parser.advance();
+            const expr = try self.expr_parser.parseAssignmentExpression();
+            try self.consumeSemicolon();
+            return self.newStmt(start, expr.end, .{ .export_decl = .{ .default = expr } });
+        }
+
+        if (self.expr_parser.current.type == .punct_lbrace) {
+            try self.expr_parser.advance();
+            var specifiers: std.ArrayList(ast.ExportSpecifier) = .empty;
+            while (self.expr_parser.current.type != .punct_rbrace) {
+                const local = try self.parseModuleName();
+                var exported = local;
+                if (self.currentIsIdentifier("as")) {
+                    try self.expr_parser.advance();
+                    exported = try self.parseModuleName();
+                }
+                try specifiers.append(self.arena, .{ .local = local, .exported = exported });
+                if (self.expr_parser.current.type != .punct_rbrace) _ = try self.expr_parser.expect(.punct_comma);
+            }
+            try self.expr_parser.advance(); // '}'
+            var source: ?[]const u8 = null;
+            if (self.currentIsIdentifier("from")) {
+                try self.expr_parser.advance();
+                source = try self.parseModuleSource();
+            }
+            try self.consumeSemicolon();
+            return self.newStmt(start, self.expr_parser.current.start, .{ .export_decl = .{
+                .named = .{ .specifiers = try specifiers.toOwnedSlice(self.arena), .source = source },
+            } });
+        }
+
+        // `export <declaration>` -- delegate; var/let/const/function/
+        // class/async-function all route through parseStatement.
+        const decl = try self.parseStatement();
+        return self.newStmt(start, decl.end, .{ .export_decl = .{ .declaration = decl } });
     }
 
     /// `DuplicateLabel` if the name is already active. `is_loop` is

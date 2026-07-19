@@ -16,6 +16,10 @@ pub const SwitchCase = ast_mod.SwitchCase;
 pub const ForInit = ast_mod.ForInit;
 pub const ForBinding = ast_mod.ForBinding;
 pub const ForHead = ast_mod.ForHead;
+pub const ImportSpecifier = ast_mod.ImportSpecifier;
+pub const ImportDecl = ast_mod.ImportDecl;
+pub const ExportSpecifier = ast_mod.ExportSpecifier;
+pub const ExportDecl = ast_mod.ExportDecl;
 
 pub const Parser = parser_mod.Parser;
 pub const ParseError = parser_mod.ParseError;

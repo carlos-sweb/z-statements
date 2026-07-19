@@ -93,6 +93,44 @@ pub const ForHead = union(enum) {
     for_of: struct { binding: ForBinding, iterable: *zparser.Node },
 };
 
+pub const ImportSpecifier = struct {
+    /// The name in the source module (`{ a as b }` -> "a").
+    imported: []const u8,
+    /// The local binding name (`{ a as b }` -> "b").
+    local: []const u8,
+};
+
+pub const ImportDecl = struct {
+    /// `import X from '...'`.
+    default_local: ?[]const u8,
+    /// `import * as ns from '...'`.
+    namespace_local: ?[]const u8,
+    /// `import { a, b as c } from '...'`.
+    named: []const ImportSpecifier,
+    source: []const u8,
+};
+
+pub const ExportSpecifier = struct {
+    /// The local binding (`{ a as b }` -> "a"); for re-exports, the name
+    /// in the source module.
+    local: []const u8,
+    /// The exported name (`{ a as b }` -> "b").
+    exported: []const u8,
+};
+
+pub const ExportDecl = union(enum) {
+    /// `export const x = 1;` / `export function f() {}` / `export class C {}`.
+    declaration: *Statement,
+    /// `export { a, b as c }` with an optional `from '...'` (re-export).
+    named: struct { specifiers: []const ExportSpecifier, source: ?[]const u8 },
+    /// `export default AssignmentExpression`. `export default function
+    /// () {}` lands here as a function *expression* (anonymous is legal;
+    /// minor divergence: it isn't hoisted like the real declaration form).
+    default: *zparser.Node,
+    /// `export * from '...'`.
+    all: struct { source: []const u8 },
+};
+
 pub const StatementData = union(enum) {
     empty: void,
     expr_stmt: *zparser.Node,
@@ -117,4 +155,8 @@ pub const StatementData = union(enum) {
     /// A class declaration, typed and owned solely by z-functions -- this
     /// repo never dereferences it. See z-functions' `asClassNode()`.
     class_declaration: *anyopaque,
+    /// Module grammar. Parsed permissively at any statement position;
+    /// the interpreter enforces module-top-level-only at runtime.
+    import_decl: ImportDecl,
+    export_decl: ExportDecl,
 };

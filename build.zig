@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
         "tests/try_switch_test.zig",
         "tests/asi_test.zig",
         "tests/misc_test.zig",
+        "tests/module_test.zig",
     };
 
     inline for (test_files) |test_file| {
