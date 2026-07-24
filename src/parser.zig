@@ -507,6 +507,15 @@ pub const Parser = struct {
     fn parseForStatement(self: *Parser) ParseError!*Statement {
         const start = self.expr_parser.current.start;
         try self.expr_parser.advance(); // 'for'
+        // `for await (... of ...)`: contextual, only meaningful inside an
+        // async function/async generator body -- gated on the same
+        // await_allowed flag that gates the `await` unary operator, so
+        // `for (await of x)` (a variable literally named "await" in
+        // non-async code) is unaffected.
+        const is_await = self.expr_parser.await_allowed and
+            self.expr_parser.current.type == .identifier and
+            std.mem.eql(u8, self.expr_parser.current.owned_value orelse self.expr_parser.current.lexeme, "await");
+        if (is_await) try self.expr_parser.advance();
         _ = try self.expr_parser.expect(.punct_lparen);
 
         const head: ast.ForHead = blk: {
@@ -522,7 +531,7 @@ pub const Parser = struct {
                 if (self.isOfKeyword()) {
                     try self.expr_parser.advance();
                     const iterable = try self.expr_parser.parseAssignmentExpression();
-                    break :blk .{ .for_of = .{ .binding = .{ .declared = .{ .kind = kind, .pattern = pattern } }, .iterable = iterable } };
+                    break :blk .{ .for_of = .{ .binding = .{ .declared = .{ .kind = kind, .pattern = pattern } }, .iterable = iterable, .is_await = is_await } };
                 }
                 // C-style: continue the declarator list from this binding.
                 // (The legacy Annex-B `for (var x = 0 in obj)` form is
@@ -559,7 +568,7 @@ pub const Parser = struct {
                 const name: ast.BindingName = .{ .name = expr.data.identifier, .start = expr.start, .end = expr.end };
                 try self.expr_parser.advance(); // consume 'of'
                 const iterable = try self.expr_parser.parseAssignmentExpression();
-                break :blk .{ .for_of = .{ .binding = .{ .existing = name }, .iterable = iterable } };
+                break :blk .{ .for_of = .{ .binding = .{ .existing = name }, .iterable = iterable, .is_await = is_await } };
             }
             if ((expr.data == .array_literal or expr.data == .object_literal) and self.isOfKeyword()) {
                 // `for ([a, b] of x)` -- the literal parsed eagerly, `of`
@@ -568,7 +577,7 @@ pub const Parser = struct {
                 if (!zparser.isValidAssignmentPattern(expr)) return ParseError.InvalidAssignmentTarget;
                 try self.expr_parser.advance(); // consume 'of'
                 const iterable = try self.expr_parser.parseAssignmentExpression();
-                break :blk .{ .for_of = .{ .binding = .{ .existing_pattern = expr }, .iterable = iterable } };
+                break :blk .{ .for_of = .{ .binding = .{ .existing_pattern = expr }, .iterable = iterable, .is_await = is_await } };
             }
             _ = try self.expr_parser.expect(.punct_semi);
             const tu = try self.parseForTestUpdate();

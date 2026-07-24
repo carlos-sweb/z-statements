@@ -72,6 +72,38 @@ test "for-of with an existing binding (no declaration keyword)" {
     }.check);
 }
 
+test "for await (...) requires await_allowed (contextual, only inside async bodies)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var parser = try zstatements.Parser.init(arena, "for await (const x of arr) a;");
+    parser.expr_parser.await_allowed = true;
+    const stmt = try parser.parseStatement();
+    try testing.expect(stmt.data.for_stmt.head == .for_of);
+    try testing.expect(stmt.data.for_stmt.head.for_of.is_await);
+}
+
+test "plain for-of has is_await = false" {
+    try helpers.parseAndCheck("for (const x of arr) a;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head == .for_of);
+            try testing.expect(!stmt.data.for_stmt.head.for_of.is_await);
+        }
+    }.check);
+}
+
+test "`for (await of x)` outside an async body: `await` stays a plain identifier binding, not the contextual keyword" {
+    try helpers.parseAndCheck("for (await of arr) a;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head == .for_of);
+            try testing.expect(!stmt.data.for_stmt.head.for_of.is_await);
+            try testing.expect(stmt.data.for_stmt.head.for_of.binding == .existing);
+            try testing.expectEqualStrings("await", stmt.data.for_stmt.head.for_of.binding.existing.name);
+        }
+    }.check);
+}
+
 test "for-in with a declaration" {
     try helpers.parseAndCheck("for (let x in obj) a;", {}, struct {
         fn check(_: void, stmt: *zstatements.Statement) !void {

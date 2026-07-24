@@ -90,7 +90,7 @@ pub const ForBinding = union(enum) {
 pub const ForHead = union(enum) {
     c_style: struct { init: ?ForInit, test_expr: ?*zparser.Node, update: ?*zparser.Node },
     for_in: struct { binding: ForBinding, object: *zparser.Node },
-    for_of: struct { binding: ForBinding, iterable: *zparser.Node },
+    for_of: struct { binding: ForBinding, iterable: *zparser.Node, is_await: bool = false },
 };
 
 pub const ImportSpecifier = struct {
