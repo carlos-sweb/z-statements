@@ -12,9 +12,23 @@ pub fn build(b: *std.Build) void {
 
     const zstatements_module = b.addModule("zstatements", .{
         .root_source_file = b.path("src/zstatements.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     zstatements_module.addImport("zparser", zparser_module);
     zstatements_module.addImport("zlexer", zlexer_module);
+
+    const docs = b.addObject(.{
+        .name = "zstatements",
+        .root_module = zstatements_module,
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = docs.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate the official Zig API documentation");
+    docs_step.dependOn(&install_docs.step);
 
     const test_step = b.step("test", "Run all tests");
 

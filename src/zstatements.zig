@@ -1,3 +1,9 @@
+//! ECMAScript statements and declarations parser (ECMA-262 section 14).
+//!
+//! Initialize `Parser` with an arena allocator and a source string, then call
+//! `Parser.parseProgram` to obtain the statement AST. Expressions are represented
+//! by z-parser nodes. The arena must outlive the parser and the returned AST.
+
 const ast_mod = @import("ast.zig");
 const parser_mod = @import("parser.zig");
 

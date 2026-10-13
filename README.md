@@ -1,9 +1,9 @@
 # Z-Statements
 
-[![Zig Version](https://img.shields.io/badge/zig-0.16-orange.svg)](https://ziglang.org/)
+[![Zig Version](https://img.shields.io/badge/zig-0.17-orange.svg)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-ECMAScript **statements and declarations parser** (ECMA-262 §14) in Zig 0.16 — the third repo of the JS engine, wrapping [z-parser](https://github.com/carlos-sweb/z-parser)'s expression parser. Part of the [z-*](https://github.com/carlos-sweb) micro-library family.
+ECMAScript **statements and declarations parser** (ECMA-262 §14) in Zig 0.17 — the third repo of the JS engine, wrapping [z-parser](https://github.com/carlos-sweb/z-parser)'s expression parser. Part of the [z-*](https://github.com/carlos-sweb) micro-library family.
 
 ## Scope: statements/declarations that don't need function bodies
 
@@ -54,6 +54,22 @@ const program = try parser.parseProgram();
 ```bash
 zig build test
 ```
+
+## API documentation
+
+Browse the [official Zig-generated API documentation](https://carlos-sweb.github.io/z-statements/).
+
+Generate it locally with Zig 0.17.0:
+
+```bash
+zig build docs
+```
+
+The generated site is in `zig-out/docs`. GitHub Actions runs the tests and
+publishes this site to GitHub Pages on every push to `master`.
+
+Release archives include z-parser and z-lexer in `vendor/`, so sibling
+checkouts are not required. z-lexer depends on z-regex v0.9.1, pinned by hash.
 
 ## License
 

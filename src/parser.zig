@@ -75,7 +75,7 @@ pub const Parser = struct {
     }
 
     /// Forwards to the underlying `zparser.Parser`'s native-stack-depth
-    /// guard (see `/home/sweb/.plans/z-parser-improve.md`) -- exists so a
+    /// guard -- exists so a
     /// caller configures it through this repo's own public surface instead
     /// of reaching into `expr_parser` directly. Default (never called) is
     /// `0`, i.e. disabled -- zero behavior change for existing callers.
