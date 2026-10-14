@@ -4,11 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zlexer_dep = b.dependency("zlexer", .{ .target = target, .optimize = optimize });
-    const zlexer_module = zlexer_dep.module("zlexer");
-
     const zparser_dep = b.dependency("zparser", .{ .target = target, .optimize = optimize });
     const zparser_module = zparser_dep.module("zparser");
+    // Expressions and statements must share the same lexer types.
+    const zlexer_module = zparser_module.import_table.get("zlexer").?;
 
     const zstatements_module = b.addModule("zstatements", .{
         .root_source_file = b.path("src/zstatements.zig"),

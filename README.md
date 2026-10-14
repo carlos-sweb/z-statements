@@ -68,8 +68,9 @@ zig build docs
 The generated site is in `zig-out/docs`. GitHub Actions runs the tests and
 publishes this site to GitHub Pages on every push to `master`.
 
-Release archives include z-parser and z-lexer in `vendor/`, so sibling
-checkouts are not required. z-lexer depends on z-regex v0.9.1, pinned by hash.
+Dependencies are fetched from GitHub with pinned package hashes. This package
+uses z-parser v0.1.0 and reuses its lexer module, so expressions and statements
+share the same AST and token types. Sibling checkouts are not required.
 
 ## License
 

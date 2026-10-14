@@ -1,6 +1,6 @@
 .{
     .name = .zstatements,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0x362813bebf11f913,
     .description = "ECMAScript statements/declarations parser (ECMA-262 section 14) in Zig",
@@ -9,11 +9,12 @@
         "build.zig.zon",
         "src/",
         "tests/",
-        "vendor/",
         "README.md",
     },
     .dependencies = .{
-        .zparser = .{ .path = "vendor/z-parser" },
-        .zlexer = .{ .path = "vendor/z-lexer" },
+        .zparser = .{
+            .url = "https://github.com/carlos-sweb/z-parser/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "zparser-0.1.0-uX9pprwPAQAfQ_bStOX4pNonRgRCJX9sdUG9l3HvLmea",
+        },
     },
 }
