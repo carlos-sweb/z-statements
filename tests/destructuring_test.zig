@@ -177,3 +177,23 @@ test "object pattern accepts numeric and string property keys with colon, reject
     try helpers.expectParseError("const { 0 } = obj;", zstatements.ParseError.UnexpectedToken);
     try helpers.expectParseError("const { \"a\" } = obj;", zstatements.ParseError.UnexpectedToken);
 }
+
+test "object pattern accepts computed property keys with colon, rejects shorthand" {
+    try helpers.parseAndCheck("const { [k]: x, [fn()]: { a } = def, ...rest } = obj;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const obj = stmt.data.variable.declarators[0].pattern.object;
+            try testing.expectEqual(@as(usize, 2), obj.properties.len);
+            try testing.expect(obj.properties[0].computed_key != null);
+            try testing.expectEqualStrings("k", obj.properties[0].computed_key.?.data.identifier);
+            try testing.expectEqualStrings("x", obj.properties[0].value.identifier.name);
+            try testing.expect(obj.properties[0].default == null);
+            try testing.expect(obj.properties[1].computed_key != null);
+            try testing.expect(obj.properties[1].computed_key.?.data == .call);
+            try testing.expect(obj.properties[1].value.* == .object);
+            try testing.expect(obj.properties[1].default != null);
+            try testing.expectEqualStrings("rest", obj.rest.?.name);
+        }
+    }.check);
+    try helpers.expectParseError("const { [k] } = obj;", zstatements.ParseError.UnexpectedToken);
+    try helpers.expectParseError("const { [k] = 1 } = obj;", zstatements.ParseError.UnexpectedToken);
+}

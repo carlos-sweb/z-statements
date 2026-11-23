@@ -39,9 +39,10 @@ pub const ArrayPattern = struct {
 };
 
 pub const ObjectPatternProperty = struct {
-    /// Property name as written in source. Computed keys are out of
-    /// scope for this phase.
+    /// Property name as written in source (empty when `computed_key != null`).
     key: []const u8,
+    /// `[AssignmentExpression]: BindingElement` computed property key.
+    computed_key: ?*zparser.Node = null,
     /// Shorthand `{x}` becomes an identifier pattern for `x`.
     value: *BindingPattern,
     default: ?*zparser.Node,

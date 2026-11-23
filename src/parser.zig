@@ -340,6 +340,26 @@ pub const Parser = struct {
                 if (self.expr_parser.current.type != .punct_rbrace) return ParseError.RestElementMustBeLast;
                 break;
             }
+            if (self.expr_parser.current.type == .punct_lbracket) {
+                try self.expr_parser.advance();
+                const computed_key = try self.expr_parser.parseAssignmentExpression();
+                _ = try self.expr_parser.expect(.punct_rbracket);
+                _ = try self.expr_parser.expect(.punct_colon);
+                const value = try self.parseBindingPattern();
+                var default: ?*zparser.Node = null;
+                if (self.expr_parser.current.type == .punct_assign) {
+                    try self.expr_parser.advance();
+                    default = try self.expr_parser.parseAssignmentExpression();
+                }
+                try properties.append(self.arena, .{
+                    .key = "",
+                    .computed_key = computed_key,
+                    .value = value,
+                    .default = default,
+                });
+                if (self.expr_parser.current.type != .punct_rbrace) _ = try self.expr_parser.expect(.punct_comma);
+                continue;
+            }
             const key_tok = self.expr_parser.current;
             const is_identifier = key_tok.type == .identifier;
             const key: []const u8 = switch (key_tok.type) {
