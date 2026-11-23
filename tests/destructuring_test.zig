@@ -160,3 +160,20 @@ test "invalid patterns in for heads are rejected at parse time" {
     try helpers.expectParseError("for ([1] of arr) x;", zstatements.ParseError.InvalidAssignmentTarget);
     try helpers.expectParseError("for ([a + b] in obj) x;", zstatements.ParseError.InvalidAssignmentTarget);
 }
+
+test "object pattern accepts numeric and string property keys with colon, rejects shorthand" {
+    try helpers.parseAndCheck("const { 0: a, 1.5: b, 0x10: c, 1e2: d, \"a-b\": e, \"\": f } = obj;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const props = stmt.data.variable.declarators[0].pattern.object.properties;
+            try testing.expectEqual(@as(usize, 6), props.len);
+            try testing.expectEqualStrings("0", props[0].key);
+            try testing.expectEqualStrings("1.5", props[1].key);
+            try testing.expectEqualStrings("16", props[2].key);
+            try testing.expectEqualStrings("100", props[3].key);
+            try testing.expectEqualStrings("a-b", props[4].key);
+            try testing.expectEqualStrings("", props[5].key);
+        }
+    }.check);
+    try helpers.expectParseError("const { 0 } = obj;", zstatements.ParseError.UnexpectedToken);
+    try helpers.expectParseError("const { \"a\" } = obj;", zstatements.ParseError.UnexpectedToken);
+}

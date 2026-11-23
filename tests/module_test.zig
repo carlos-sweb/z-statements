@@ -82,3 +82,48 @@ test "import errors: missing source / missing from" {
     try helpers.expectParseError("import from './m.js';", zstatements.ParseError.UnexpectedToken);
     try helpers.expectParseError("import * as ns './m.js';", zstatements.ParseError.UnexpectedToken);
 }
+
+test "export default class/function does not require a trailing semicolon" {
+    const zparser = @import("zparser");
+    var dummy: u8 = 0;
+    const Stub = struct {
+        fn skipBalanced(parser: *zparser.Parser) zparser.ParseError!usize {
+            while (parser.current.type != .punct_lbrace and parser.current.type != .eof) {
+                try parser.advance();
+            }
+            _ = try parser.expect(.punct_lbrace);
+            const end = parser.current.end;
+            _ = try parser.expect(.punct_rbrace);
+            return end;
+        }
+        fn parseFn(ctx: *anyopaque, parser: *zparser.Parser) zparser.ParseError!zparser.FunctionHookResult {
+            const end = try skipBalanced(parser);
+            return .{ .node = ctx, .end = end };
+        }
+        fn parseMethod(ctx: *anyopaque, parser: *zparser.Parser, _: zparser.MethodKind, _: []const u8, _: bool, _: bool) zparser.ParseError!zparser.FunctionHookResult {
+            const end = try skipBalanced(parser);
+            return .{ .node = ctx, .end = end };
+        }
+    };
+    const hooks: zparser.FunctionHooks = .{
+        .ctx = @ptrCast(&dummy),
+        .parseArrowFunction = Stub.parseFn,
+        .parseFunctionExpression = Stub.parseFn,
+        .parseMethod = Stub.parseMethod,
+        .parseClassExpression = Stub.parseFn,
+    };
+    const cases = [_]struct { src: []const u8, second_tag: std.meta.Tag(zstatements.StatementData) }{
+        .{ .src = "export default class {}\nconst x = 1;", .second_tag = .variable },
+        .{ .src = "export default function() {} if (true) {}", .second_tag = .if_stmt },
+    };
+    for (cases) |c| {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        var parser = try zstatements.Parser.init(arena.allocator(), c.src);
+        parser.expr_parser.function_hooks = hooks;
+        const stmts = try parser.parseProgram();
+        try testing.expectEqual(@as(usize, 2), stmts.len);
+        try testing.expect(stmts[0].data == .export_decl);
+        try testing.expectEqual(c.second_tag, std.meta.activeTag(stmts[1].data));
+    }
+}

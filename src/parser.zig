@@ -321,6 +321,14 @@ pub const Parser = struct {
     /// computed keys in patterns are out of scope for this phase. Shorthand
     /// (`{x}`) requires a real identifier -- `{if}` would otherwise bind a
     /// reserved word.
+    fn formatNumberKey(arena: Allocator, n: f64) ParseError![]const u8 {
+        if (n == 0) return "0";
+        if (std.math.isFinite(n) and @trunc(n) == n and n >= -9007199254740992.0 and n <= 9007199254740992.0) {
+            return std.fmt.allocPrint(arena, "{d}", .{@as(i64, @intFromFloat(n))}) catch return ParseError.OutOfMemory;
+        }
+        return std.fmt.allocPrint(arena, "{d}", .{n}) catch return ParseError.OutOfMemory;
+    }
+
     fn parseObjectPattern(self: *Parser) ParseError!ast.ObjectPattern {
         _ = try self.expr_parser.expect(.punct_lbrace);
         var properties: std.ArrayList(ast.ObjectPatternProperty) = .empty;
@@ -334,10 +342,18 @@ pub const Parser = struct {
             }
             const key_tok = self.expr_parser.current;
             const is_identifier = key_tok.type == .identifier;
-            if (!is_identifier and zlexer.keywordFromLexeme(key_tok.lexeme) == null) {
-                return ParseError.UnexpectedToken;
-            }
-            const key = key_tok.owned_value orelse key_tok.lexeme;
+            const key: []const u8 = switch (key_tok.type) {
+                .identifier => key_tok.owned_value orelse key_tok.lexeme,
+                .string_literal => key_tok.owned_value orelse key_tok.lexeme[1 .. key_tok.lexeme.len - 1],
+                .numeric_literal => blk_num: {
+                    const n = key_tok.numeric_value orelse return ParseError.UnexpectedToken;
+                    break :blk_num try formatNumberKey(self.arena, n);
+                },
+                else => blk_kw: {
+                    if (zlexer.keywordFromLexeme(key_tok.lexeme) == null) return ParseError.UnexpectedToken;
+                    break :blk_kw key_tok.lexeme;
+                },
+            };
             try self.expr_parser.advance();
             var value: *ast.BindingPattern = undefined;
             if (self.expr_parser.current.type == .punct_colon) {
@@ -513,6 +529,17 @@ pub const Parser = struct {
     /// documented trade-off: unparenthesized `for (a in obj; ...)` is
     /// accepted permissively here instead of being rejected as real
     /// ECMA-262 requires (`for ((a in obj); ...)`).
+    fn isValidForTarget(node: *zparser.Node) bool {
+        var n = node;
+        while (n.data == .paren) n = n.data.paren;
+        return switch (n.data) {
+            .identifier => true,
+            .member => |m| !m.optional,
+            .array_literal, .object_literal => zparser.isValidAssignmentPattern(n),
+            else => false,
+        };
+    }
+
     fn parseForStatement(self: *Parser) ParseError!*Statement {
         const start = self.expr_parser.current.start;
         try self.expr_parser.advance(); // 'for'
@@ -562,28 +589,49 @@ pub const Parser = struct {
             const expr = try self.expr_parser.parseExpression();
             if (self.expr_parser.current.type == .punct_rparen and expr.data == .binary and expr.data.binary.op == .in) {
                 const bin = expr.data.binary;
+                if (bin.left.data == .identifier) {
+                    const name: ast.BindingName = .{ .name = bin.left.data.identifier, .start = bin.left.start, .end = bin.left.end };
+                    break :blk .{ .for_in = .{ .binding = .{ .existing = name }, .object = bin.right } };
+                }
                 if (bin.left.data == .array_literal or bin.left.data == .object_literal) {
-                    // `for ([a, b] in obj)` -- destructuring assignment over
-                    // existing bindings; same cover-grammar validation as
-                    // `[a, b] = x`.
                     if (!zparser.isValidAssignmentPattern(bin.left)) return ParseError.InvalidAssignmentTarget;
                     break :blk .{ .for_in = .{ .binding = .{ .existing_pattern = bin.left }, .object = bin.right } };
                 }
-                if (bin.left.data != .identifier) return ParseError.InvalidForInTarget;
-                const name: ast.BindingName = .{ .name = bin.left.data.identifier, .start = bin.left.start, .end = bin.left.end };
-                break :blk .{ .for_in = .{ .binding = .{ .existing = name }, .object = bin.right } };
+                if (isValidForTarget(bin.left)) {
+                    break :blk .{ .for_in = .{ .binding = .{ .existing_pattern = bin.left }, .object = bin.right } };
+                }
+                return ParseError.InvalidForInTarget;
+            }
+            if (self.expr_parser.current.type == .punct_rparen and expr.data == .sequence and expr.data.sequence.len >= 2 and expr.data.sequence[0].data == .binary and expr.data.sequence[0].data.binary.op == .in) {
+                const first_bin = expr.data.sequence[0].data.binary;
+                var rhs_items = try self.arena.alloc(*zparser.Node, expr.data.sequence.len);
+                rhs_items[0] = first_bin.right;
+                @memcpy(rhs_items[1..], expr.data.sequence[1..]);
+                const rhs_seq = try self.arena.create(zparser.Node);
+                rhs_seq.* = .{ .start = first_bin.right.start, .end = expr.end, .data = .{ .sequence = rhs_items } };
+                if (first_bin.left.data == .identifier) {
+                    const name: ast.BindingName = .{ .name = first_bin.left.data.identifier, .start = first_bin.left.start, .end = first_bin.left.end };
+                    break :blk .{ .for_in = .{ .binding = .{ .existing = name }, .object = rhs_seq } };
+                }
+                if (isValidForTarget(first_bin.left)) {
+                    break :blk .{ .for_in = .{ .binding = .{ .existing_pattern = first_bin.left }, .object = rhs_seq } };
+                }
+                return ParseError.InvalidForInTarget;
             }
             if (expr.data == .identifier and self.isOfKeyword()) {
+                if (!is_await and (expr.end - expr.start) == 5 and std.mem.eql(u8, expr.data.identifier, "async")) return ParseError.UnexpectedToken;
                 const name: ast.BindingName = .{ .name = expr.data.identifier, .start = expr.start, .end = expr.end };
                 try self.expr_parser.advance(); // consume 'of'
                 const iterable = try self.expr_parser.parseAssignmentExpression();
                 break :blk .{ .for_of = .{ .binding = .{ .existing = name }, .iterable = iterable, .is_await = is_await } };
             }
             if ((expr.data == .array_literal or expr.data == .object_literal) and self.isOfKeyword()) {
-                // `for ([a, b] of x)` -- the literal parsed eagerly, `of`
-                // isn't an expression continuation so parseExpression
-                // already stopped right after it.
                 if (!zparser.isValidAssignmentPattern(expr)) return ParseError.InvalidAssignmentTarget;
+                try self.expr_parser.advance(); // consume 'of'
+                const iterable = try self.expr_parser.parseAssignmentExpression();
+                break :blk .{ .for_of = .{ .binding = .{ .existing_pattern = expr }, .iterable = iterable, .is_await = is_await } };
+            }
+            if (isValidForTarget(expr) and self.isOfKeyword()) {
                 try self.expr_parser.advance(); // consume 'of'
                 const iterable = try self.expr_parser.parseAssignmentExpression();
                 break :blk .{ .for_of = .{ .binding = .{ .existing_pattern = expr }, .iterable = iterable, .is_await = is_await } };
@@ -868,7 +916,12 @@ pub const Parser = struct {
         if (self.expr_parser.current.type == .keyword_default) {
             try self.expr_parser.advance();
             const expr = try self.expr_parser.parseAssignmentExpression();
-            try self.consumeSemicolon();
+            const is_decl_form = expr.data == .function_like or expr.data == .class_like;
+            if (!is_decl_form) {
+                try self.consumeSemicolon();
+            } else if (self.expr_parser.current.type == .punct_semi) {
+                try self.expr_parser.advance();
+            }
             return self.newStmt(start, expr.end, .{ .export_decl = .{ .default = expr } });
         }
 

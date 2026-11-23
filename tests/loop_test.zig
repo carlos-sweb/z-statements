@@ -139,8 +139,43 @@ test "for-of declared bindings accept destructuring patterns" {
     }.check);
 }
 
-test "a member expression as an unparenthesized for-in target is rejected" {
-    try helpers.expectParseError("for (a.b in obj) x;", zstatements.ParseError.InvalidForInTarget);
+test "member and parenthesized expressions as for-in / for-of targets" {
+    try helpers.parseAndCheck("for (a.b in obj) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const binding = stmt.data.for_stmt.head.for_in.binding;
+            try testing.expect(binding == .existing_pattern);
+            try testing.expect(binding.existing_pattern.data == .member);
+        }
+    }.check);
+    try helpers.parseAndCheck("for (async.x of [1]) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            const binding = stmt.data.for_stmt.head.for_of.binding;
+            try testing.expect(binding == .existing_pattern);
+            try testing.expect(binding.existing_pattern.data == .member);
+        }
+    }.check);
+    try helpers.parseAndCheck("for (async[0] of [1]) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head.for_of.binding == .existing_pattern);
+        }
+    }.check);
+    try helpers.parseAndCheck("for (async().x of [1]) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head.for_of.binding == .existing_pattern);
+        }
+    }.check);
+    try helpers.parseAndCheck("for (async in obj) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head.for_in.binding == .existing);
+        }
+    }.check);
+    try helpers.expectParseError("for (async of [1]) x;", zstatements.ParseError.UnexpectedToken);
+    try helpers.parseAndCheck("for (\\u0061sync of [1]) x;", {}, struct {
+        fn check(_: void, stmt: *zstatements.Statement) !void {
+            try testing.expect(stmt.data.for_stmt.head.for_of.binding == .existing);
+        }
+    }.check);
+    try helpers.expectParseError("for (a + b in obj) x;", zstatements.ParseError.InvalidForInTarget);
 }
 
 test "for(a;b) -- a missing second ';' is a hard error, not silently accepted" {
